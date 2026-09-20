@@ -1,225 +1,118 @@
 import logging
-import qrcode
-from io import BytesIO
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+import os
+import urllib.parse
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, CallbackQueryHandler,
-    MessageHandler, filters, ContextTypes, ConversationHandler
+    ApplicationBuilder,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
 )
 
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# Logging Setup
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
 
-# --- CONFIGURATION ---
-BOT_TOKEN = "8776238868:AAG3POYCQU9ZaZ_Y_QBC2WmPruEjlcirosw"      # BotFather Token
-ADMIN_ID = 7304215296                  # Aapki Admin ID
-MERCHANT_UPI = "BHARATPE.9N0W0I1H4F585383@unitype" # Aapka Merchant UPI ID
+# Environment variables
+TOKEN = os.getenv("8776238868:AAG3POYCQU9ZaZ_Y_QBC2WmPruEjlcirosw")
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "7304215296")
 
-WAITING_FOR_UTR = 1
+# UPI Details
+UPI_ID = os.getenv("UPI_ID", "BHARATPE.9N0W0I1H4F585383@unitype")
+PAYEE_NAME = "Voucher Store"
 
-# Category Details, Prices & Stock
+# Voucher Inventory / Menu Data
 VOUCHERS = {
-    "flipkart": {"name": "Flipkart ₹500 Gift Card", "price": 450, "codes": ["FK-SAMPLE-101", "FK-SAMPLE-102"]},
-    "shein": {"name": "Shein ₹1000 Voucher", "price": 850, "codes": ["SHEIN-9988-X"]},
-    "abhibus": {"name": "AbhiBus ₹200 Discount", "price": 100, "codes": ["ABHI-BUS-200"]},
-    "pvr": {"name": "PVR Movie Voucher ₹300", "price": 250, "codes": ["PVR-MOV-300"]}
+    "flipkart": {"name": "🛍️ Flipkart ₹500", "price": 450, "stock": 2},
+    "shein": {"name": "👗 Shein ₹1000", "price": 850, "stock": 1},
+    "abhibus": {"name": "🚌 AbhiBus ₹200", "price": 100, "stock": 1},
+    "pvr": {"name": "🎬 PVR ₹300", "price": 250, "stock": 1},
 }
-
-PENDING_ORDERS = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = []
     for key, item in VOUCHERS.items():
-        stock_count = len(item["codes"])
-        keyboard.append([
-            InlineKeyboardButton(f"{item['name']} (₹{item['price']}) - Stock: {stock_count}", callback_data=f'buy_{key}')
-        ])
-        
+        button_text = f"{item['name']} (₹{item['price']})"
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=key)])
+
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "👋 **Voucher Store Bot mein Aapka Swagat hai!**\n\nKripya niche se apna voucher select karein:",
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
+    text = (
+        "👋 **Voucher Store Bot mein Aapka Swagat hai!**\n\n"
+        "Kripya niche se apna voucher select karein:"
     )
-    return ConversationHandler.END
+    if update.message:
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+    elif update.callback_query:
+        await update.callback_query.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    data = query.data
 
-    if data.startswith("buy_"):
-        item_key = data.split("_")[1]
-        item = VOUCHERS.get(item_key)
+    selected_key = query.data
+    if selected_key in VOUCHERS:
+        item = VOUCHERS[selected_key]
+        amount = item['price']
+        
+        # Dynamic UPI Link and QR URL
+        upi_url = f"upi://pay?pa={UPI_ID}&pn={urllib.parse.quote(PAYEE_NAME)}&am={amount}&cu=INR"
+        qr_code_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={urllib.parse.quote(upi_url)}"
 
-        if len(item["codes"]) == 0:
-            await query.message.reply_text("❌ Ye voucher abhi Out of Stock hai! Kripya baad mein try karein.")
-            return ConversationHandler.END
-
-        context.user_data['selected_item'] = item_key
-
-        upi_url = f"upi://pay?pa={MERCHANT_UPI}&pn=VoucherStore&am={item['price']}&cu=INR"
-        qr = qrcode.make(upi_url)
-        bio = BytesIO()
-        bio.name = 'qr.png'
-        qr.save(bio, 'PNG')
-        bio.seek(0)
-
-        msg = (
+        caption = (
             f"📦 **Selected Item:** {item['name']}\n"
-            f"💰 **Amount to Pay:** ₹{item['price']}\n\n"
-            f"👉 Step 1: QR Code par pay karein (UPI ID: `{MERCHANT_UPI}`).\n"
-            f"👉 Step 2: Payment ke baad **12-digit UTR/Txn ID** yahan chat mein likhkar bhejye."
+            f"💰 **Amount to Pay:** ₹{amount}\n\n"
+            f"👉 **Step 1:** Niche diye gaye QR Code par pay karein ya UPI ID copy karein:\n"
+            f"📍 **UPI ID:** `{UPI_ID}`\n\n"
+            f"👉 **Step 2:** Payment ke baad 12-digit UTR/Txn ID yahan chat mein likhkar bhejye."
         )
-        await query.message.reply_photo(photo=bio, caption=msg, parse_mode='Markdown')
-        return WAITING_FOR_UTR
+        
+        # Sent photo with QR code
+        await query.message.reply_photo(
+            photo=qr_code_url,
+            caption=caption,
+            parse_mode="Markdown"
+        )
 
-async def receive_utr(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    utr = update.message.text.strip()
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
     user = update.message.from_user
-    item_key = context.user_data.get('selected_item')
-    item = VOUCHERS.get(item_key)
+    chat_id = update.message.chat_id
 
-    if not item or len(item["codes"]) == 0:
-        await update.message.reply_text("Kuch error hua ya stock khatam ho gaya. /start dabayein.")
-        return ConversationHandler.END
-
-    order_id = f"{user.id}_{utr}"
-    PENDING_ORDERS[order_id] = {
-        "user_id": user.id,
-        "item_key": item_key,
-        "utr": utr
-    }
-
-    admin_keyboard = [
-        [
-            InlineKeyboardButton("✅ Approve", callback_data=f"approve_{order_id}"),
-            InlineKeyboardButton("❌ Reject", callback_data=f"reject_{order_id}")
-        ]
-    ]
-    admin_msg = (
-        f"🚨 **New Payment Request!**\n\n"
-        f"👤 **User:** {user.full_name} (@{user.username})\n"
-        f"🆔 **User ID:** `{user.id}`\n"
-        f"📦 **Voucher:** {item['name']}\n"
-        f"💵 **Price:** ₹{item['price']}\n"
-        f"🔢 **UTR Number:** `{utr}`"
-    )
-    
-    await context.bot.send_message(
-        chat_id=ADMIN_ID,
-        text=admin_msg,
-        reply_markup=InlineKeyboardMarkup(admin_keyboard),
-        parse_mode='Markdown'
-    )
-
-    await update.message.reply_text(
-        "✅ **Aapka UTR submit ho gaya hai!**\n\nAdmin verification ke baad instant voucher bhej diya jayega."
-    )
-    return ConversationHandler.END
-
-async def admin_action_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-
-    if data.startswith("approve_"):
-        order_id = data.replace("approve_", "")
-        order = PENDING_ORDERS.get(order_id)
-
-        if order:
-            user_id = order["user_id"]
-            item_key = order["item_key"]
-            item = VOUCHERS.get(item_key)
-
-            if len(item["codes"]) > 0:
-                # Stock se pehla code nikal kar send karein aur delete karein
-                voucher_code = item["codes"].pop(0)
-
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text=f"🎉 **Payment Verified!**\n\nAapka Voucher Code ye raha:\n🎫 `{voucher_code}`",
-                    parse_mode='Markdown'
-                )
-                await query.edit_message_text(f"✅ Approved for User `{user_id}` | Code Delivered: `{voucher_code}`")
-            else:
-                await query.edit_message_text("❌ Stock Khatam Ho Gaya Hai!")
-            
-            del PENDING_ORDERS[order_id]
-
-    elif data.startswith("reject_"):
-        order_id = data.replace("reject_", "")
-        order = PENDING_ORDERS.get(order_id)
-
-        if order:
-            user_id = order["user_id"]
-            await context.bot.send_message(
-                chat_id=user_id,
-                text="❌ **Payment Verification Failed!**\nUTR match nahi hua."
+    if text.isdigit() and len(text) == 12:
+        await update.message.reply_text(
+            f"✅ UTR Received: `{text}`\n\n"
+            f"👤 **Aapki Chat ID:** `{chat_id}`\n"
+            "Aapka payment verify ho raha hai. Kuch hi der mein aapka voucher code yahan mil jayega!",
+            parse_mode="Markdown",
+        )
+        
+        # Admin Alert
+        try:
+            admin_msg = (
+                f"🚨 **New Payment Verification Request!**\n\n"
+                f"👤 **User:** {user.full_name} (@{user.username})\n"
+                f"🆔 **User Chat ID:** `{chat_id}`\n"
+                f"💳 **UTR/Txn ID:** `{text}`"
             )
-            await query.edit_message_text(f"❌ Rejected for User `{user_id}`")
-            del PENDING_ORDERS[order_id]
+            await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=admin_msg, parse_mode="Markdown")
+        except Exception as e:
+            logging.error(f"Could not send message to admin: {e}")
+            
+    else:
+        await update.message.reply_text("⚠️ Kripya 12-digit ka sahi UTR/Txn ID bhejin.")
 
-# --- ADMIN COMMANDS ---
-async def admin_add_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != ADMIN_ID:
-        return
+if __name__ == "__main__":
+    if not TOKEN:
+        raise ValueError("BOT_TOKEN environment variable is not set!")
     
-    try:
-        category = context.args[0].lower()
-        code = context.args[1]
-
-        if category in VOUCHERS:
-            VOUCHERS[category]["codes"].append(code)
-            await update.message.reply_text(f"✅ `{code}` added to `{category}` stock!\nTotal Stock: {len(VOUCHERS[category]['codes'])}", parse_mode='Markdown')
-        else:
-            await update.message.reply_text(f"❌ Category not found. Valid ones: {list(VOUCHERS.keys())}")
-    except IndexingError:
-        await update.message.reply_text("Usage: `/addcode <flipkart/shein/abhibus/pvr> <code>`", parse_mode='Markdown')
-
-async def admin_set_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != ADMIN_ID:
-        return
-    
-    try:
-        category = context.args[0].lower()
-        price = int(context.args[1])
-
-        if category in VOUCHERS:
-            VOUCHERS[category]["price"] = price
-            await update.message.reply_text(f"✅ Price updated for `{category}` to ₹{price}!", parse_mode='Markdown')
-        else:
-            await update.message.reply_text(f"❌ Category not found.")
-    except Exception:
-        await update.message.reply_text("Usage: `/setprice <flipkart/shein/abhibus/pvr> <new_price>`", parse_mode='Markdown')
-
-async def admin_check_stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != ADMIN_ID:
-        return
-    
-    stock_text = "📊 **Current Stock & Prices:**\n\n"
-    for key, item in VOUCHERS.items():
-        stock_text += f"🔹 **{item['name']}** (`{key}`):\n Price: ₹{item['price']} | Stock: {len(item['codes'])}\n\n"
-    
-    await update.message.reply_text(stock_text, parse_mode='Markdown')
-
-if __name__ == '__main__':
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(button_handler, pattern="^buy_")],
-        states={
-            WAITING_FOR_UTR: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_utr)]
-        },
-        fallbacks=[CommandHandler('start', start)],
-        per_message=False
-    )
-
+    app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("addcode", admin_add_code))
-    app.add_handler(CommandHandler("setprice", admin_set_price))
-    app.add_handler(CommandHandler("stock", admin_check_stock))
-    app.add_handler(conv_handler)
-    app.add_handler(CallbackQueryHandler(admin_action_handler, pattern="^(approve_|reject_)"))
-
-    print("Bot Successfully Chalu Ho Gaya Hai...")
+    app.add_handler(CallbackQueryHandler(button_click))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
+    print("Bot is running...")
     app.run_polling()
