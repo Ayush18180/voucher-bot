@@ -224,3 +224,18 @@ if __name__ == '__main__':
     print("Bot Successfully Chalu Ho Gaya Hai...")
     app.run_polling()
 
+
+import os
+from flask import Flask
+from threading import Thread
+
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is running live!"
+
+def run():
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+
+Thread(target=run).start()
